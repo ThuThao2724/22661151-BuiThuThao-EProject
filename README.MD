@@ -5,7 +5,7 @@ Test all business logic with POSTMAN
 
 - REGISTER : 
 
-![alt text](Public/image.PNG)
+![alt text](Public/img1.jpg)
 
 -REGISTER THIEU USERNAME HOAC PASSWORD 
 
