@@ -1,0 +1,147 @@
+version: "3.8"
+
+services:
+  # 🐇 RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - micro_network
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 🍃 MongoDB
+  mymongodb:
+    image: mongo:7.0
+    container_name: mymongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - micro_network
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 👤 Auth Service
+  auth:
+    build: ./auth
+    container_name: auth
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - MONGODB_AUTH_URI=mongodb://mymongodb:27017/authdb
+      - JWT_SECRET=mySuperSecretKey789
+      - RABBITMQ_URL=amqp://rabbitmq
+    depends_on:
+      mymongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - micro_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # 📦 Product Service
+  product:
+    build: ./product
+    container_name: product
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGODB_PRODUCT_URI=mongodb://mymongodb:27017/productdb
+      - RABBITMQ_URL=amqp://rabbitmq
+      - JWT_SECRET=mySuperSecretKey789
+    depends_on:
+      mymongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - micro_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # 🧾 Order Service
+  order:
+    build: ./order
+    container_name: order
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGODB_ORDER_URI=mongodb://mymongodb:27017/orderdb
+      - RABBITMQ_URL=amqp://rabbitmq
+      - JWT_SECRET=mySuperSecretKey789
+    depends_on:
+      mymongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - micro_network
+    command: sh -c "sleep 10 && npm start"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # 🚪 API Gateway
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - AUTH_SERVICE_URL=http://auth:3000
+      - PRODUCT_SERVICE_URL=http://product:3001
+      - ORDER_SERVICE_URL=http://order:3002
+      - JWT_SECRET=mySuperSecretKey789
+      - LOG_LEVEL=debug
+    depends_on:
+      auth:
+        condition: service_healthy
+      product:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+    command: sh -c "sleep 5 && npm start"
+    networks:
+      - micro_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  mongo_data:
+
+networks:
+  micro_network:
+    driver: bridge
