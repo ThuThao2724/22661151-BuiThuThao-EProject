@@ -4,10 +4,11 @@ Setup all microservices
 Test all business logic with POSTMAN
 
 - REGISTER : 
+
 ![alt text](Public/image.PNG)
 
 -REGISTER THIEU USERNAME HOAC PASSWORD 
-![alt text][def]
+
 ![alt text](Public/img3.PNG)
 
 -LOGIN 
