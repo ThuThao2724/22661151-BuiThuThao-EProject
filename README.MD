@@ -4,10 +4,10 @@ Setup all microservices
 Test all business logic with POSTMAN
 
 - REGISTER : 
-![alt text](image.png)
+![alt text](Public/image.png)
 
 -REGISTER THIEU USERNAME HOAC PASSWORD 
-![alt text](Public/img2.PNG)
+![alt text][def]
 ![alt text](Public/img3.PNG)
 
 -LOGIN 
@@ -48,3 +48,5 @@ docker exec -it mymongodb bash
 
 ![alt text](Public/img19.PNG)
 ![alt text](Public/img20.PNG)
+
+[def]: Public/img2.PNG
