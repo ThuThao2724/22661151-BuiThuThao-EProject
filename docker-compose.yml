@@ -10,11 +10,6 @@ services:
       - "15672:15672"
     networks:
       - micro_network
-    healthcheck:
-      test: ["CMD", "rabbitmqctl", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # 🍃 MongoDB
   mymongodb:
@@ -27,87 +22,6 @@ services:
       - mongo_data:/data/db
     networks:
       - micro_network
-    healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # 👤 Auth Service
-  auth:
-    build: ./auth
-    container_name: auth
-    ports:
-      - "3000:3000"
-    environment:
-      - PORT=3000
-      - MONGODB_AUTH_URI=mongodb://mymongodb:27017/authdb
-      - JWT_SECRET=mySuperSecretKey789
-      - RABBITMQ_URL=amqp://rabbitmq
-    depends_on:
-      mymongodb:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - micro_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health || exit 0"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-
-  # 📦 Product Service
-  product:
-    build: ./product
-    container_name: product
-    ports:
-      - "3001:3001"
-    environment:
-      - PORT=3001
-      - MONGODB_PRODUCT_URI=mongodb://mymongodb:27017/productdb
-      - RABBITMQ_URL=amqp://rabbitmq
-      - JWT_SECRET=mySuperSecretKey789
-    depends_on:
-      mymongodb:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - micro_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-
-  # 🧾 Order Service
-  order:
-    build: ./order
-    container_name: order
-    ports:
-      - "3002:3002"
-    environment:
-      - PORT=3002
-      - MONGODB_ORDER_URI=mongodb://mymongodb:27017/orderdb
-      - RABBITMQ_URL=amqp://rabbitmq
-      - JWT_SECRET=mySuperSecretKey789
-    depends_on:
-      mymongodb:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - micro_network
-    command: sh -c "sleep 10 && npm start"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
 
   # 🚪 API Gateway
   api-gateway:
@@ -123,25 +37,67 @@ services:
       - JWT_SECRET=mySuperSecretKey789
       - LOG_LEVEL=debug
     depends_on:
-      auth:
-        condition: service_healthy
-      product:
-        condition: service_healthy
-      order:
-        condition: service_healthy
-    command: sh -c "sleep 5 && npm start"
+      - auth
+      - order
+      - product
     networks:
       - micro_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
+
+  # 👤 Auth Service
+  auth:
+    build: ./auth
+    container_name: auth
+    environment:
+      - MONGODB_AUTH_URI=mongodb://mymongodb:27017/authdb
+      - JWT_SECRET=mySuperSecretKey789
+      - RABBITMQ_URL=amqp://rabbitmq
+    depends_on:
+      - mymongodb
+      - rabbitmq
+    ports:
+      - "3000:3000"
+    networks:
+      - micro_network
+
+  # 📦 Product Service
+  product:
+    build: ./product
+    container_name: product
+    environment:
+      - MONGODB_PRODUCT_URI=mongodb://mymongodb:27017/productdb
+      - RABBITMQ_URL=amqp://rabbitmq
+      - JWT_SECRET=mySuperSecretKey789
+    depends_on:
+      - mymongodb
+      - rabbitmq
+    ports:
+      - "3001:3001"
+    networks:
+      - micro_network
+
+  # 🧾 Order Service
+  order:
+    build: ./order
+    container_name: order
+    environment:
+      - MONGODB_ORDER_URI=mongodb://mymongodb:27017/orderdb
+      - RABBITMQ_URL=amqp://rabbitmq
+      - JWT_SECRET=mySuperSecretKey789
+    depends_on:
+      # Sửa đổi: Đảm bảo RabbitMQ và MongoDB đã khởi động
+      - mymongodb
+      - rabbitmq
+    ports:
+      - "3002:3002"
+    networks:
+      - micro_network
+    # THAY ĐỔI LỚN: Sử dụng 'command' để chờ 10 giây trước khi chạy lệnh khởi động chính.
+    # Đây là giải pháp tạm thời, đáng tin cậy hơn so với setTimeout trong code NodeJS.
+    command: sh -c "sleep 10 && npm start"
 
 volumes:
   mongo_data:
 
 networks:
   micro_network:
-    driver: bridge
+    driver: bridge  
