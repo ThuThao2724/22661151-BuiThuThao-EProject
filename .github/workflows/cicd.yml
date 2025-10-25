@@ -48,6 +48,7 @@ jobs:
       working-directory: ./${{ matrix.service }}
       run: npm run build --if-present
 
+
   docker-build-push:
     needs: test
     runs-on: ubuntu-latest
@@ -63,12 +64,22 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    # 🐳 Login to Docker Hub
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
+    # 🐙 Login to GitHub Container Registry (optional)
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    # 🧱 Build and Push Images
     - name: Build and push ${{ matrix.service }}
       uses: docker/build-push-action@v5
       with:
@@ -77,11 +88,14 @@ jobs:
         tags: |
           ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}-cicd:latest
           ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}-cicd:${{ github.sha }}
+          ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}-cicd:latest
+          ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}-cicd:${{ github.sha }}
+
 
   deploy:
     needs: docker-build-push
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     
     steps:
     - uses: actions/checkout@v4
@@ -89,25 +103,27 @@ jobs:
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
-        username: ${{ secrets.DOCKER_USERNAME }}    # ✅ SỬA DÒNG NÀY
-        password: ${{ secrets.DOCKER_PASSWORD }}    # ✅ SỬA DÒNG NÀY
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Create production compose file
       run: |
         cat > docker-compose.prod.yml << EOF
         version: "3.9"
         services:
-          auth:
-            image: ${{ secrets.DOCKER_USERNAME }}/auth-cicd:latest
-            container_name: 'auth-cicd'
+          mongo:
+            image: mongo:6
+            container_name: mongodb-cicd
             ports:
-              - "3000:3000"
+              - "27017:27017"
+            volumes:
+              - mongo_data:/data/db
             networks:
               - cicd-network
 
           rabbitmq:
             image: rabbitmq:3.8-management-alpine
-            container_name: 'rabbitmq-cicd'
+            container_name: rabbitmq-cicd
             ports:
               - "5672:5672"
               - "15672:15672"
@@ -116,47 +132,47 @@ jobs:
             networks:
               - cicd-network
 
-          order:
-            image: ${{ secrets.DOCKER_USERNAME }}/order-cicd:latest
-            container_name: 'order-cicd'
+          auth:
+            image: ${{ secrets.DOCKER_USERNAME }}/auth-cicd:latest
+            container_name: auth-cicd
             ports:
-              - "3002:3002"
+              - "3000:3000"
             depends_on:
+              - mongo
               - rabbitmq
-            environment:
-              - RABBITMQ_URL=amqp://rabbitmq-cicd:5672
             networks:
               - cicd-network
 
           product:
             image: ${{ secrets.DOCKER_USERNAME }}/product-cicd:latest
-            container_name: 'product-cicd'
+            container_name: product-cicd
             ports:
               - "3001:3001"
             depends_on:
+              - mongo
               - rabbitmq
-            environment:
-              - RABBITMQ_URL=amqp://rabbitmq-cicd:5672
+            networks:
+              - cicd-network
+
+          order:
+            image: ${{ secrets.DOCKER_USERNAME }}/order-cicd:latest
+            container_name: order-cicd
+            ports:
+              - "3002:3002"
+            depends_on:
+              - rabbitmq
             networks:
               - cicd-network
 
           api-gateway:
             image: ${{ secrets.DOCKER_USERNAME }}/api-gateway-cicd:latest
-            container_name: 'gateway-cicd'
+            container_name: gateway-cicd
             ports:
               - "3003:3003"
-            environment:
-              - RABBITMQ_URL=amqp://rabbitmq-cicd:5672
-            networks:
-              - cicd-network
-
-          mongo:
-            image: mongo:6
-            container_name: 'mongodb-cicd'
-            ports:
-              - "27017:27017"
-            volumes:
-              - mongo_data:/data/db
+            depends_on:
+              - order
+              - product
+              - auth
             networks:
               - cicd-network
 
@@ -168,21 +184,23 @@ jobs:
           mongo_data:
           rabbitmq_data:
         EOF
+
     - name: Ensure Docker is running
       run: docker info
-    - name: Pull và start services
+
+    - name: Pull and start services
       run: |
         docker compose -f docker-compose.prod.yml pull
         docker compose -f docker-compose.prod.yml up -d
         sleep 20
         docker compose -f docker-compose.prod.yml ps
 
-    - name: Test services
+    - name: Verify services
       run: |
-        curl -f http://localhost:3003 || echo "Gateway OK"
-        curl -f http://localhost:3000 || echo "Auth OK"
-        curl -f http://localhost:3001 || echo "Product OK"
-        curl -f http://localhost:3002 || echo "Order OK"
+        curl -f http://localhost:3003 || echo "✅ API Gateway OK"
+        curl -f http://localhost:3000 || echo "✅ Auth OK"
+        curl -f http://localhost:3001 || echo "✅ Product OK"
+        curl -f http://localhost:3002 || echo "✅ Order OK"
 
     - name: Cleanup
       if: always()
