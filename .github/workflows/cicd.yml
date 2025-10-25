@@ -1,207 +1,87 @@
-name: Microservices CI/CD with Docker
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+    branches: [ main ]
+
+permissions:
+  contents: read
 
 jobs:
+
   test:
     runs-on: ubuntu-latest
-    
     services:
-      mongodb:
+      mongo:
         image: mongo:6
-        ports:
-          - 27017:27017
-      
+        ports: [ "27017:27017" ]
+        options: >-
+          --health-cmd="mongosh --eval 'db.runCommand({ ping: 1 })' || exit 1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
       rabbitmq:
-        image: rabbitmq:3.8-management-alpine
-        ports:
-          - 5672:5672
-
-    strategy:
-      matrix:
-        service: [auth, order, product, api-gateway]
-        node-version: [20.x]
+        image: rabbitmq:3-management
+        ports: [ "5672:5672", "15672:15672" ]
+        options: >-
+          --health-cmd="rabbitmq-diagnostics -q ping"
+          --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-        cache-dependency-path: ${{ matrix.service }}/package-lock.json
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-    - name: Install dependencies
-      working-directory: ./${{ matrix.service }}
-      run: npm ci
+      - name: Install & Test auth
+        working-directory: ./auth
+        run: |
+          npm ci
+          npm test --if-present
 
-    - name: Run tests
-      working-directory: ./${{ matrix.service }}
-      run: npm test --if-present || echo "No test for ${{ matrix.service }}"
-
-    - name: Build
-      working-directory: ./${{ matrix.service }}
-      run: npm run build --if-present
+      - name: Install & Test product
+        working-directory: ./product
+        run: |
+          npm ci
+          npm test --if-present
 
 
-  docker-build-push:
+  build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    
     strategy:
       matrix:
-        service: [auth, order, product, api-gateway]
-    
+        service: [api-gateway, auth, product, order]
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    # 🐳 Login to Docker Hub
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    # 🐙 Login to GitHub Container Registry
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    # 🧱 Build and Push Images
-    - name: Build and push ${{ matrix.service }}
-      uses: docker/build-push-action@v5
-      with:
-        context: ./${{ matrix.service }}
-        push: true
-        tags: |
-          ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}-cicd:latest
-          ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}-cicd:${{ github.sha }}
-          ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}-cicd:latest
-          ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}-cicd:${{ github.sha }}
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
 
 
   deploy:
-    needs: docker-build-push
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
+    needs: build-and-push
+    runs-on: self-hosted
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    - name: Create production compose file
-      run: |
-        cat > docker-compose.prod.yml << EOF
-        version: "3.9"
-        services:
-          mongo:
-            image: mongo:6
-            container_name: mongodb-cicd
-            ports:
-              - "27017:27017"
-            volumes:
-              - mongo_data:/data/db
-            networks:
-              - cicd-network
-
-          rabbitmq:
-            image: rabbitmq:3.8-management-alpine
-            container_name: rabbitmq-cicd
-            ports:
-              - "5672:5672"
-              - "15672:15672"
-            volumes:
-              - rabbitmq_data:/var/lib/rabbitmq/
-            networks:
-              - cicd-network
-
-          auth:
-            image: ${{ secrets.DOCKER_USERNAME }}/auth-cicd:latest
-            container_name: auth-cicd
-            ports:
-              - "3000:3000"
-            depends_on:
-              - mongo
-              - rabbitmq
-            networks:
-              - cicd-network
-
-          product:
-            image: ${{ secrets.DOCKER_USERNAME }}/product-cicd:latest
-            container_name: product-cicd
-            ports:
-              - "3001:3001"
-            depends_on:
-              - mongo
-              - rabbitmq
-            networks:
-              - cicd-network
-
-          order:
-            image: ${{ secrets.DOCKER_USERNAME }}/order-cicd:latest
-            container_name: order-cicd
-            ports:
-              - "3002:3002"
-            depends_on:
-              - rabbitmq
-            networks:
-              - cicd-network
-
-          api-gateway:
-            image: ${{ secrets.DOCKER_USERNAME }}/api-gateway-cicd:latest
-            container_name: gateway-cicd
-            ports:
-              - "3003:3003"
-            depends_on:
-              - order
-              - product
-              - auth
-            networks:
-              - cicd-network
-
-        networks:
-          cicd-network:
-            driver: bridge
-
-        volumes:
-          mongo_data:
-          rabbitmq_data:
-        EOF
-
-    - name: Ensure Docker is running
-      run: docker info
-
-    - name: Pull and start services
-      run: |
-        docker compose -f docker-compose.prod.yml pull
-        docker compose -f docker-compose.prod.yml up -d
-        sleep 20
-        docker compose -f docker-compose.prod.yml ps
-
-    - name: Verify services
-      run: |
-        curl -f http://localhost:3003 || echo "✅ API Gateway OK"
-        curl -f http://localhost:3000 || echo "✅ Auth OK"
-        curl -f http://localhost:3001 || echo "✅ Product OK"
-        curl -f http://localhost:3002 || echo "✅ Order OK"
-
-    - name: Cleanup
-      if: always()
-      run: docker compose -f docker-compose.prod.yml down
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - shell: cmd
+        run: |
+          cd /d D:\EProject-Phase-1
+          docker-compose -f docker-compose.prod.yml pull
+          docker-compose -f docker-compose.prod.yml up -d --remove-orphans
