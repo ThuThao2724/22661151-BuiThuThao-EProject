@@ -125,6 +125,7 @@ class ProductController {
     }
   }
   // ------------------------------------------------------------
+  // end cau 8
 }
 
 module.exports = ProductController;
