@@ -112,8 +112,7 @@ class ProductController {
     }
   }
   // ------------------------------------------------
-  //  cau 8 
-    async getProductById(req, res) {
+  async getProductById(req, res) {
     try {
       const product = await Product(req.params.id);
       if (!product) return res.status(404).json({ message: "Product not found" });
@@ -123,7 +122,7 @@ class ProductController {
     }
   }
   // ------------------------------------------------------------
-  //
+
 }
 
 module.exports = ProductController;
